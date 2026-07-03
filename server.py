@@ -143,18 +143,28 @@ class GameServer:
             "winner": self.winner,
         })
 
+    async def _send_to(self, pid, p, msg):
+        try:
+            # Hard timeout: if a client's connection is stalled (backgrounded
+            # tab, flaky wifi, etc.) this send would otherwise block forever
+            # and freeze the game loop for EVERY player, not just this one.
+            await asyncio.wait_for(p.ws.send_str(msg), timeout=1.0)
+            return None
+        except (ConnectionResetError, asyncio.TimeoutError, RuntimeError, ConnectionError):
+            return pid
+
     async def broadcast(self):
         if not self.players:
             return
         msg = self.state_json()
-        dead = []
-        for pid, p in list(self.players.items()):
-            try:
-                await p.ws.send_str(msg)
-            except ConnectionResetError:
-                dead.append(pid)
-        for pid in dead:
-            self.players.pop(pid, None)
+        # Send to all players concurrently (not one-after-another) so a slow
+        # connection to Player A can't delay the update reaching Player B.
+        results = await asyncio.gather(
+            *(self._send_to(pid, p, msg) for pid, p in list(self.players.items()))
+        )
+        for pid in results:
+            if pid is not None:
+                self.players.pop(pid, None)
 
 
 game = GameServer()
@@ -178,7 +188,10 @@ async def start_background_tasks(app):
 
 
 async def websocket_handler(request):
-    ws = web.WebSocketResponse()
+    # heartbeat sends a ping every 15s and auto-closes the connection if the
+    # client doesn't respond — catches truly-dead connections (closed laptop
+    # lid, lost wifi, etc.) quickly instead of leaving a ghost player around.
+    ws = web.WebSocketResponse(heartbeat=15)
     await ws.prepare(request)
 
     assigned = None
