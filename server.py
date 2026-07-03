@@ -99,16 +99,8 @@ class GameServer:
                     p.alive = False
                     continue
 
-                for other_id, other in self.players.items():
-                    if other_id == pid:
-                        continue
-                    other_body = other.snake if other.alive else other.snake[:-1]
-                    if (nx, ny) in other_body:
-                        p.alive = False
-                        break
-                    if other_id in new_heads and new_heads[other_id] == (nx, ny):
-                        p.alive = False
-                        break
+                # Snakes now pass through each other freely — no death on
+                # crossing the other player's body or a head-on collision.
 
             for pid, p in self.players.items():
                 if not p.alive:
