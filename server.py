@@ -22,14 +22,16 @@ STATIC_DIR = os.path.join(os.path.dirname(__file__), "static")
 
 
 class Player:
-    def __init__(self, player_id, ws):
+    def __init__(self, player_id, ws, name):
         self.id = player_id
         self.ws = ws
+        self.name = name
         self.snake = []
         self.dir = (1, 0)
         self.next_dir = (1, 0)
         self.alive = True
         self.score = 0
+        self.death_reason = None   # "wall", "self", or None
 
 
 class GameServer:
@@ -55,6 +57,7 @@ class GameServer:
             p.next_dir = dirs[pid]
             p.alive = True
             p.score = 0
+            p.death_reason = None
         self.over = False
         self.winner = None
         self._place_food()
@@ -93,13 +96,15 @@ class GameServer:
 
                 if not (0 <= nx < COLS and 0 <= ny < ROWS):
                     p.alive = False
+                    p.death_reason = "wall"
                     continue
 
                 if (nx, ny) in list(p.snake)[:-1]:
                     p.alive = False
+                    p.death_reason = "self"
                     continue
 
-                # Snakes now pass through each other freely — no death on
+                # Snakes pass through each other freely — no death on
                 # crossing the other player's body or a head-on collision.
 
             for pid, p in self.players.items():
@@ -124,7 +129,13 @@ class GameServer:
         return json.dumps({
             "type": "state",
             "snakes": {
-                str(pid): {"body": p.snake, "alive": p.alive, "score": p.score}
+                str(pid): {
+                    "body": p.snake,
+                    "alive": p.alive,
+                    "score": p.score,
+                    "name": p.name,
+                    "death_reason": p.death_reason,
+                }
                 for pid, p in self.players.items()
             },
             "food": self.food,
@@ -153,8 +164,13 @@ async def game_loop(app):
     while True:
         await asyncio.sleep(SPEED)
         if len(game.players) == 2:
-            await game.tick()
-            await game.broadcast()
+            try:
+                await game.tick()
+                await game.broadcast()
+            except Exception as e:
+                # Never let one bad tick kill the loop for everyone —
+                # this is what caused the game to "hang" permanently before.
+                print(f"[game_loop] error during tick/broadcast: {e!r}")
 
 
 async def start_background_tasks(app):
@@ -177,7 +193,8 @@ async def websocket_handler(request):
         await ws.close()
         return ws
 
-    player = Player(assigned, ws)
+    name = request.query.get("name", "").strip()[:20] or f"Player {assigned}"
+    player = Player(assigned, ws, name)
     async with game.lock:
         game.players[assigned] = player
         if len(game.players) == 2:

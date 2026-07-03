@@ -33,6 +33,41 @@
     color: var(--text);
   }
   h1 { font-size: 20px; margin: 12px 0 4px; letter-spacing: 1px; }
+
+  /* ── Name entry screen ────────────────────────────────────────────── */
+  #nameScreen {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 14px;
+    padding: 30px;
+  }
+  #nameScreen p { font-size: 13px; opacity: 0.7; margin: 0; max-width: 320px; text-align: center; }
+  #nameInput {
+    font-family: "Courier New", monospace;
+    font-size: 16px;
+    padding: 10px 14px;
+    border: 2px solid #333;
+    border-radius: 6px;
+    width: 240px;
+    text-align: center;
+  }
+  #joinBtn {
+    font-family: "Courier New", monospace;
+    font-size: 15px;
+    font-weight: bold;
+    padding: 10px 28px;
+    border: none;
+    border-radius: 6px;
+    background: var(--p1-head);
+    color: white;
+    cursor: pointer;
+  }
+  #joinBtn:hover { opacity: 0.9; }
+  #joinError { color: #cc0000; font-size: 12px; min-height: 16px; }
+
+  /* ── Game screen ───────────────────────────────────────────────────── */
+  #gameScreen { display: none; flex-direction: column; align-items: center; }
   #scoreBar {
     width: 600px;
     max-width: 92vw;
@@ -53,6 +88,7 @@
     margin-top: 8px;
     font-size: 13px;
     min-height: 18px;
+    text-align: center;
   }
   #hint {
     margin-top: 4px;
@@ -62,14 +98,27 @@
 </style>
 </head>
 <body>
-  <h1>SNAKE — MULTIPLAYER</h1>
-  <div id="scoreBar">
-    <span id="p1score">Player 1: 0</span>
-    <span id="p2score">Player 2: 0</span>
+
+  <!-- Name entry -->
+  <div id="nameScreen">
+    <h1>SNAKE — MULTIPLAYER</h1>
+    <p>Enter your name and join. The first two players to join play against each other.</p>
+    <input id="nameInput" type="text" placeholder="Your name" maxlength="20" autocomplete="off">
+    <button id="joinBtn">Play</button>
+    <div id="joinError"></div>
   </div>
-  <canvas id="board" width="600" height="500"></canvas>
-  <div id="status">Connecting…</div>
-  <div id="hint">Arrows or WASD to move · R to restart</div>
+
+  <!-- Game -->
+  <div id="gameScreen">
+    <h1>SNAKE — MULTIPLAYER</h1>
+    <div id="scoreBar">
+      <span id="p1score">Player 1: 0</span>
+      <span id="p2score">Player 2: 0</span>
+    </div>
+    <canvas id="board" width="600" height="500"></canvas>
+    <div id="status">Connecting…</div>
+    <div id="hint">Arrows or WASD to move · R to restart</div>
+  </div>
 
 <script>
 const CELL = 20, COLS = 30, ROWS = 25;
@@ -93,6 +142,12 @@ const COLORS = {
   },
 };
 
+const nameScreen = document.getElementById('nameScreen');
+const gameScreen = document.getElementById('gameScreen');
+const nameInput = document.getElementById('nameInput');
+const joinBtn = document.getElementById('joinBtn');
+const joinError = document.getElementById('joinError');
+
 const canvas = document.getElementById('board');
 const ctx = canvas.getContext('2d');
 const statusEl = document.getElementById('status');
@@ -101,34 +156,63 @@ const p2El = document.getElementById('p2score');
 
 let playerId = null;
 let state = null;
+let ws = null;
 
-const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
-const ws = new WebSocket(proto + location.host + '/ws');
+function joinGame() {
+  const name = nameInput.value.trim() || 'Player';
+  joinBtn.disabled = true;
+  joinError.textContent = '';
 
-ws.onopen = () => { statusEl.textContent = 'Connected. Waiting for player info…'; };
-ws.onerror = () => { statusEl.textContent = 'Connection error — is the server running?'; };
-ws.onclose = () => { statusEl.textContent = 'Disconnected. Refresh to reconnect.'; };
+  const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+  ws = new WebSocket(proto + location.host + '/ws?name=' + encodeURIComponent(name));
 
-ws.onmessage = (event) => {
+  ws.onopen = () => {
+    nameScreen.style.display = 'none';
+    gameScreen.style.display = 'flex';
+    statusEl.textContent = 'Connected. Waiting for player info…';
+  };
+  ws.onerror = () => {
+    joinError.textContent = 'Connection error — is the server running?';
+    joinBtn.disabled = false;
+  };
+  ws.onclose = () => {
+    if (gameScreen.style.display === 'flex') {
+      statusEl.textContent = 'Disconnected. Refresh to reconnect.';
+    } else {
+      joinError.textContent = 'Could not connect. Try again.';
+      joinBtn.disabled = false;
+    }
+  };
+  ws.onmessage = handleMessage;
+}
+
+joinBtn.addEventListener('click', joinGame);
+nameInput.addEventListener('keydown', (e) => { if (e.key === 'Enter') joinGame(); });
+nameInput.focus();
+
+function handleMessage(event) {
   const msg = JSON.parse(event.data);
   if (msg.type === 'welcome') {
     playerId = msg.player_id;
     statusEl.textContent = `You are Player ${playerId} — waiting for opponent…`;
   } else if (msg.type === 'full') {
-    statusEl.textContent = 'Server is full (2 players already connected). Try again later.';
+    joinError.textContent = 'Server is full (2 players already connected). Try again later.';
+    nameScreen.style.display = 'flex';
+    gameScreen.style.display = 'none';
+    joinBtn.disabled = false;
   } else if (msg.type === 'state') {
     state = msg;
     draw();
   }
-};
+}
 
 function sendDir(dx, dy) {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'dir', dx, dy }));
   }
 }
 function sendRestart() {
-  if (ws.readyState === WebSocket.OPEN) {
+  if (ws && ws.readyState === WebSocket.OPEN) {
     ws.send(JSON.stringify({ type: 'restart' }));
   }
 }
@@ -141,6 +225,7 @@ const KEY_DIRS = {
 };
 
 window.addEventListener('keydown', (e) => {
+  if (gameScreen.style.display !== 'flex') return;
   if (e.key in KEY_DIRS) {
     e.preventDefault();
     const [dx, dy] = KEY_DIRS[e.key];
@@ -168,7 +253,6 @@ function draw() {
 
   const snakes = state.snakes;
 
-  // Food
   const [fx, fy] = state.food;
   const pad = 3;
   ctx.fillStyle = COLORS.food;
@@ -179,7 +263,6 @@ function draw() {
   );
   ctx.fill();
 
-  // Snakes
   for (const pidStr of Object.keys(snakes)) {
     const pid = parseInt(pidStr, 10);
     const s = snakes[pidStr];
@@ -197,24 +280,40 @@ function draw() {
     }
   }
 
-  p1El.textContent = `Player 1: ${snakes['1'] ? snakes['1'].score : 0}`;
-  p2El.textContent = `Player 2: ${snakes['2'] ? snakes['2'].score : 0}`;
+  const p1 = snakes['1'], p2 = snakes['2'];
+  p1El.textContent = `${p1 ? p1.name : 'Player 1'}: ${p1 ? p1.score : 0}`;
+  p2El.textContent = `${p2 ? p2.name : 'Player 2'}: ${p2 ? p2.score : 0}`;
 
   if (state.over) {
-    const winner = state.winner;
-    let title, sub;
-    if (winner === 'draw' || winner === null) {
-      title = 'DRAW'; sub = 'Press R to restart';
-    } else {
-      title = `PLAYER ${winner} WINS`; sub = 'Press R to restart';
-    }
-    overlay(title, sub);
-    statusEl.textContent = 'Game over.';
+    overlayGameOver(p1, p2);
   } else if (Object.keys(snakes).length < 2) {
     overlay('WAITING', 'For another player to join…');
+    statusEl.textContent = '';
   } else {
-    statusEl.textContent = `You are Player ${playerId}`;
+    const me = playerId === 1 ? p1 : p2;
+    statusEl.textContent = me ? `You are ${me.name}` : '';
   }
+}
+
+function overlayGameOver(p1, p2) {
+  let title, sub;
+  const winner = state.winner;
+
+  if (winner === 'draw' || winner === null || winner === undefined) {
+    title = "IT'S A DRAW";
+    sub = 'Press R to restart';
+  } else {
+    const winnerObj = winner === 1 ? p1 : p2;
+    const loserObj = winner === 1 ? p2 : p1;
+    const winnerName = winnerObj ? winnerObj.name : `Player ${winner}`;
+    title = `${winnerName.toUpperCase()} WINS!`;
+    let reason = '';
+    if (loserObj && loserObj.death_reason === 'wall') reason = `${loserObj.name} hit a wall`;
+    else if (loserObj && loserObj.death_reason === 'self') reason = `${loserObj.name} ran into themself`;
+    sub = reason ? `${reason} · Press R to restart` : 'Press R to restart';
+  }
+  overlay(title, sub);
+  statusEl.textContent = winner === 'draw' ? 'Game over — draw.' : 'Game over.';
 }
 
 function drawBow(sx, sy, colors) {
@@ -250,14 +349,14 @@ function overlay(title, sub) {
   ctx.fillStyle = COLORS.overlay;
   ctx.strokeStyle = '#FFFFFF';
   ctx.lineWidth = 2;
-  ctx.fillRect(cx - 150, cy - 55, 300, 110);
-  ctx.strokeRect(cx - 150, cy - 55, 300, 110);
+  ctx.fillRect(cx - 170, cy - 55, 340, 110);
+  ctx.strokeRect(cx - 170, cy - 55, 340, 110);
 
   ctx.fillStyle = '#FFFFFF';
   ctx.textAlign = 'center';
-  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.font = 'bold 20px "Courier New", monospace';
   ctx.fillText(title, cx, cy - 12);
-  ctx.font = '13px "Courier New", monospace';
+  ctx.font = '12px "Courier New", monospace';
   ctx.fillText(sub, cx, cy + 20);
 }
 
