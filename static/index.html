@@ -1,0 +1,267 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Snake — Multiplayer</title>
+<style>
+  :root {
+    --bg: #FFFFFF;
+    --grid: #E0E0E0;
+    --food: #FFD700;
+    --text: #000000;
+    --overlay: #333333;
+    --p1-head: #FF1493;
+    --p1-body: #FF69B4;
+    --p1-bow: #FF2D95;
+    --p1-knot: #C2003D;
+    --p2-head: #1E90FF;
+    --p2-body: #87CEFA;
+    --p2-bow: #0077FF;
+    --p2-knot: #00408A;
+  }
+  * { box-sizing: border-box; }
+  body {
+    margin: 0;
+    min-height: 100vh;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    background: var(--bg);
+    font-family: "Courier New", monospace;
+    color: var(--text);
+  }
+  h1 { font-size: 20px; margin: 12px 0 4px; letter-spacing: 1px; }
+  #scoreBar {
+    width: 600px;
+    max-width: 92vw;
+    display: flex;
+    justify-content: space-between;
+    padding: 6px 4px;
+    font-weight: bold;
+    font-size: 15px;
+  }
+  #p1score { color: var(--p1-head); }
+  #p2score { color: var(--p2-head); }
+  canvas {
+    border: 1px solid var(--grid);
+    max-width: 92vw;
+    height: auto;
+  }
+  #status {
+    margin-top: 8px;
+    font-size: 13px;
+    min-height: 18px;
+  }
+  #hint {
+    margin-top: 4px;
+    font-size: 11px;
+    opacity: 0.6;
+  }
+</style>
+</head>
+<body>
+  <h1>SNAKE — MULTIPLAYER</h1>
+  <div id="scoreBar">
+    <span id="p1score">Player 1: 0</span>
+    <span id="p2score">Player 2: 0</span>
+  </div>
+  <canvas id="board" width="600" height="500"></canvas>
+  <div id="status">Connecting…</div>
+  <div id="hint">Arrows or WASD to move · R to restart</div>
+
+<script>
+const CELL = 20, COLS = 30, ROWS = 25;
+const WIDTH = CELL * COLS, HEIGHT = CELL * ROWS;
+
+const COLORS = {
+  grid: getComputedStyle(document.documentElement).getPropertyValue('--grid').trim(),
+  food: getComputedStyle(document.documentElement).getPropertyValue('--food').trim(),
+  overlay: getComputedStyle(document.documentElement).getPropertyValue('--overlay').trim(),
+  1: {
+    head: getComputedStyle(document.documentElement).getPropertyValue('--p1-head').trim(),
+    body: getComputedStyle(document.documentElement).getPropertyValue('--p1-body').trim(),
+    bow:  getComputedStyle(document.documentElement).getPropertyValue('--p1-bow').trim(),
+    knot: getComputedStyle(document.documentElement).getPropertyValue('--p1-knot').trim(),
+  },
+  2: {
+    head: getComputedStyle(document.documentElement).getPropertyValue('--p2-head').trim(),
+    body: getComputedStyle(document.documentElement).getPropertyValue('--p2-body').trim(),
+    bow:  getComputedStyle(document.documentElement).getPropertyValue('--p2-bow').trim(),
+    knot: getComputedStyle(document.documentElement).getPropertyValue('--p2-knot').trim(),
+  },
+};
+
+const canvas = document.getElementById('board');
+const ctx = canvas.getContext('2d');
+const statusEl = document.getElementById('status');
+const p1El = document.getElementById('p1score');
+const p2El = document.getElementById('p2score');
+
+let playerId = null;
+let state = null;
+
+const proto = location.protocol === 'https:' ? 'wss://' : 'ws://';
+const ws = new WebSocket(proto + location.host + '/ws');
+
+ws.onopen = () => { statusEl.textContent = 'Connected. Waiting for player info…'; };
+ws.onerror = () => { statusEl.textContent = 'Connection error — is the server running?'; };
+ws.onclose = () => { statusEl.textContent = 'Disconnected. Refresh to reconnect.'; };
+
+ws.onmessage = (event) => {
+  const msg = JSON.parse(event.data);
+  if (msg.type === 'welcome') {
+    playerId = msg.player_id;
+    statusEl.textContent = `You are Player ${playerId} — waiting for opponent…`;
+  } else if (msg.type === 'full') {
+    statusEl.textContent = 'Server is full (2 players already connected). Try again later.';
+  } else if (msg.type === 'state') {
+    state = msg;
+    draw();
+  }
+};
+
+function sendDir(dx, dy) {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'dir', dx, dy }));
+  }
+}
+function sendRestart() {
+  if (ws.readyState === WebSocket.OPEN) {
+    ws.send(JSON.stringify({ type: 'restart' }));
+  }
+}
+
+const KEY_DIRS = {
+  ArrowUp: [0, -1], w: [0, -1], W: [0, -1],
+  ArrowDown: [0, 1], s: [0, 1], S: [0, 1],
+  ArrowLeft: [-1, 0], a: [-1, 0], A: [-1, 0],
+  ArrowRight: [1, 0], d: [1, 0], D: [1, 0],
+};
+
+window.addEventListener('keydown', (e) => {
+  if (e.key in KEY_DIRS) {
+    e.preventDefault();
+    const [dx, dy] = KEY_DIRS[e.key];
+    sendDir(dx, dy);
+  } else if (e.key === 'r' || e.key === 'R') {
+    sendRestart();
+  }
+});
+
+function draw() {
+  ctx.clearRect(0, 0, WIDTH, HEIGHT);
+  ctx.fillStyle = '#FFFFFF';
+  ctx.fillRect(0, 0, WIDTH, HEIGHT);
+
+  ctx.strokeStyle = COLORS.grid;
+  ctx.lineWidth = 1;
+  for (let x = 0; x <= WIDTH; x += CELL) {
+    ctx.beginPath(); ctx.moveTo(x, 0); ctx.lineTo(x, HEIGHT); ctx.stroke();
+  }
+  for (let y = 0; y <= HEIGHT; y += CELL) {
+    ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(WIDTH, y); ctx.stroke();
+  }
+
+  if (!state) return;
+
+  const snakes = state.snakes;
+
+  // Food
+  const [fx, fy] = state.food;
+  const pad = 3;
+  ctx.fillStyle = COLORS.food;
+  ctx.beginPath();
+  ctx.ellipse(
+    fx * CELL + CELL / 2, fy * CELL + CELL / 2,
+    (CELL - pad * 2) / 2, (CELL - pad * 2) / 2, 0, 0, Math.PI * 2
+  );
+  ctx.fill();
+
+  // Snakes
+  for (const pidStr of Object.keys(snakes)) {
+    const pid = parseInt(pidStr, 10);
+    const s = snakes[pidStr];
+    const colors = COLORS[pid];
+
+    s.body.forEach(([sx, sy], i) => {
+      const color = i === 0 ? colors.head : colors.body;
+      const p = i > 0 ? 1 : 0;
+      ctx.fillStyle = color;
+      ctx.fillRect(sx * CELL + p, sy * CELL + p, CELL - p * 2, CELL - p * 2);
+    });
+
+    if (s.body.length && s.alive) {
+      drawBow(s.body[0][0], s.body[0][1], colors);
+    }
+  }
+
+  p1El.textContent = `Player 1: ${snakes['1'] ? snakes['1'].score : 0}`;
+  p2El.textContent = `Player 2: ${snakes['2'] ? snakes['2'].score : 0}`;
+
+  if (state.over) {
+    const winner = state.winner;
+    let title, sub;
+    if (winner === 'draw' || winner === null) {
+      title = 'DRAW'; sub = 'Press R to restart';
+    } else {
+      title = `PLAYER ${winner} WINS`; sub = 'Press R to restart';
+    }
+    overlay(title, sub);
+    statusEl.textContent = 'Game over.';
+  } else if (Object.keys(snakes).length < 2) {
+    overlay('WAITING', 'For another player to join…');
+  } else {
+    statusEl.textContent = `You are Player ${playerId}`;
+  }
+}
+
+function drawBow(sx, sy, colors) {
+  const cx = sx * CELL + CELL / 2;
+  const cy = sy * CELL + 5;
+  const wing = 4;
+  ctx.fillStyle = colors.bow;
+  ctx.strokeStyle = colors.knot;
+  ctx.lineWidth = 1;
+
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx - wing, cy - wing);
+  ctx.lineTo(cx - wing, cy + wing);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  ctx.beginPath();
+  ctx.moveTo(cx, cy);
+  ctx.lineTo(cx + wing, cy - wing);
+  ctx.lineTo(cx + wing, cy + wing);
+  ctx.closePath();
+  ctx.fill(); ctx.stroke();
+
+  ctx.fillStyle = colors.knot;
+  ctx.beginPath();
+  ctx.ellipse(cx, cy, 2, 2, 0, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+function overlay(title, sub) {
+  const cx = WIDTH / 2, cy = HEIGHT / 2;
+  ctx.fillStyle = COLORS.overlay;
+  ctx.strokeStyle = '#FFFFFF';
+  ctx.lineWidth = 2;
+  ctx.fillRect(cx - 150, cy - 55, 300, 110);
+  ctx.strokeRect(cx - 150, cy - 55, 300, 110);
+
+  ctx.fillStyle = '#FFFFFF';
+  ctx.textAlign = 'center';
+  ctx.font = 'bold 22px "Courier New", monospace';
+  ctx.fillText(title, cx, cy - 12);
+  ctx.font = '13px "Courier New", monospace';
+  ctx.fillText(sub, cx, cy + 20);
+}
+
+draw();
+</script>
+</body>
+</html>
